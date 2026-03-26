@@ -1,9 +1,9 @@
 {
   "imap": {
     "user": "your-qq-email@qq.com",
-    "pass": "your-smtp-or-imap-authorization-code",
     "checkIntervalMs": 30000
   },
+  // NOTE: pass can be omitted here if QQ_SMTP_PASS is set in ~/.follow-builders/.env
   "whitelist": [
     {
       "email": "friend1@qq.com",
