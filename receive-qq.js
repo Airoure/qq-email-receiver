@@ -56,10 +56,13 @@ async function loadConfig() {
     throw new Error(`Failed to load config from ${configPath}: ${err.message}`);
   }
 
-  // Allow .env to override imap credentials
+  // Allow .env to override imap credentials (fallback to SMTP vars)
   loadEnv({ path: ENV_PATH });
   if (process.env.QQ_IMAP_USER) config.imap.user = process.env.QQ_IMAP_USER;
   if (process.env.QQ_IMAP_PASS) config.imap.pass = process.env.QQ_IMAP_PASS;
+  // Fallback: use SMTP credentials if IMAP not set
+  if (!config.imap.user && process.env.QQ_SMTP_USER) config.imap.user = process.env.QQ_SMTP_USER;
+  if (!config.imap.pass && process.env.QQ_SMTP_PASS) config.imap.pass = process.env.QQ_SMTP_PASS;
 
   if (!config.imap?.user || !config.imap?.pass) {
     throw new Error('IMAP user/pass not configured in receivers.json or .env');
@@ -97,62 +100,78 @@ async function waitForIdle(imap) {
 
 // -- Email Fetching ----------------------------------------------------------
 
-async function fetchUnseenEmails(imap) {
+async function openInbox(imap) {
   return new Promise((resolve, reject) => {
-    const doFetch = () => {
-      const query = buildSearchQuery();
-      imap.search(query, async (err, results) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        if (!results || results.length === 0) {
-          resolve([]);
-          return;
-        }
+    imap.openBox('INBOX', true, (err, box) => {
+      if (err) reject(err);
+      else resolve(box);
+    });
+  });
+}
 
-        const fetch = imap.fetch(results, {
-          bodies: '',
-          struct: true
-        });
+async function fetchUnseenEmails(imap, query) {
+  query = query || ['UNSEEN'];
+  return new Promise((resolve, reject) => {
+    imap.search(query, (err, results) => {
+      if (err) { reject(err); return; }
+      if (!results || results.length === 0) { resolve([]); return; }
 
-        const emails = [];
-        fetch.on('message', (msg) => {
-          const email = { id: msg.uid || msg.seqno, headers: {}, subject: '', from: '', text: '' };
+      const ids = results;
+      const emailPromises = [];
+
+      const f = imap.fetch(ids, { bodies: '', markSeen: false });
+
+      f.on('message', (msg, seqno) => {
+        const idx = ids.indexOf(Number(seqno));
+        if (idx === -1) return;
+        const uid = msg.uid;
+
+        emailPromises[idx] = new Promise((res) => {
           msg.on('body', (stream) => {
-            let buffer = '';
-            stream.on('data', (chunk) => { buffer += chunk.toString('utf-8'); });
-            stream.once('end', async () => {
-              try {
-                const parsed = await simpleParser(buffer);
-                email.subject = parsed.subject || '(无主题)';
-                email.from = parsed.from?.text || '';
-                email.text = parsed.text || '';
-                // Normalize from: "User <email>" -> just email
-                const match = email.from.match(/<(.+?)>/);
-                if (match) email.from = match[1];
-              } catch (e) {
-                // use raw buffer
-              }
-              emails.push(email);
+            const chunks = [];
+            stream.on('data', (c) => chunks.push(c));
+            stream.once('end', () => {
+              const buffer = Buffer.concat(chunks).toString('utf-8');
+              simpleParser(buffer).then((parsed) => {
+                const from = parsed.from?.text || '';
+                const m = from.match(/<(.+?)>/);
+                res({
+                  uid,
+                  seqno,
+                  subject: parsed.subject || '(无主题)',
+                  from: m ? m[1].toLowerCase().trim() : from.toLowerCase().trim(),
+                  text: parsed.text || ''
+                });
+              }).catch(() => res({ uid, seqno, subject: '', from: '', text: '' }));
             });
           });
+          msg.once('error', () => res({ uid, seqno, subject: '', from: '', text: '' }));
         });
-
-        fetch.once('end', () => {
-          // Wait a bit for all 'end' events to fire
-          setTimeout(() => resolve(emails), 500);
-        });
-
-        fetch.once('error', reject);
       });
-    };
 
-    if (imap.state === 'authenticated') {
-      doFetch();
-    } else {
-      imap.once('ready', doFetch);
+      f.once('error', reject);
+      f.once('end', () => {
+        // Wait for all email promises to resolve
+        Promise.all(emailPromises).then(resolve).catch(() => resolve([]));
+      });
+    });
+  });
+}
+
+async function markAsSeen(imap, email) {
+  return new Promise((resolve) => {
+    if (!email.seqno && !email.uid) {
+      console.log(JSON.stringify({ status: 'error', action: 'mark_seen', reason: 'no id available' }));
+      resolve();
+      return;
     }
+    // Try seqno first, fall back to uid
+    const id = email.seqno || email.uid;
+    imap.addFlags(id, '\\Seen', (err) => {
+      if (err) console.log(JSON.stringify({ status: 'error', action: 'mark_seen', reason: err.message }));
+      else console.log(JSON.stringify({ status: 'ok', action: 'mark_seen', id }));
+      resolve();
+    });
   });
 }
 
@@ -270,23 +289,10 @@ function matchWhitelist(email, whitelist) {
   }) || null;
 }
 
-// -- Mark as Seen -----------------------------------------------------------
-
-function markAsSeen(imap, email) {
-  return new Promise((resolve) => {
-    imap.addFlags(email.id, '\\Seen', (err) => {
-      if (err) {
-        console.log(JSON.stringify({ status: 'error', action: 'mark_seen', message: err.message }));
-      }
-      resolve();
-    });
-  });
-}
-
 // -- Main Loop ---------------------------------------------------------------
 
 async function processEmails(imap, config, transporter) {
-  const emails = await fetchUnseenEmails(imap);
+  const emails = await fetchUnseenEmails(imap, ['UNSEEN']);
   if (emails.length === 0) {
     console.log(JSON.stringify({ status: 'ok', action: 'poll', message: 'No new emails' }));
     return;
@@ -351,6 +357,8 @@ async function main() {
     imap.once('error', reject);
     imap.connect();
   });
+
+  await openInbox(imap);
 
   const poll = async () => {
     try {

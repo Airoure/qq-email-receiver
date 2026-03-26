@@ -37,7 +37,6 @@ cp config.example.json ~/.follow-builders/receivers.json
 | `imap.pass` | SMTP/IMAP 授权码（和 SMTP 用同一个码） |
 | `imap.checkIntervalMs` | 轮询间隔（毫秒），默认 30000（30秒） |
 
-> **凭证说明**：IMAP 授权码和 SMTP 授权码是同一个码。如果 `~/.follow-builders/.env` 里已配置 `QQ_SMTP_PASS`，脚本会自动使用它（无需在 receivers.json 里重复配置）。
 
 #### 白名单配置
 
