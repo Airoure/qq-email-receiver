@@ -184,7 +184,7 @@ async function handleAction(action, email, smtpTransport) {
     case 'api':
       return callApi(action);
     case 'reply':
-      return sendReply(action, email, smtpTransport);
+      return sendReply(action, email);
     default:
       console.log(JSON.stringify({ status: 'error', action: 'unknown_type', message: `Unknown action type: ${action.type}` }));
   }
@@ -244,38 +244,40 @@ async function callApi(action) {
   }
 }
 
-function sendReply(action, email, transporter) {
-  return new Promise(async (resolve) => {
-    try {
-      // Extract the original sender email for reply
-      const replyTo = email.from;
-      if (!replyTo) {
-        console.log(JSON.stringify({ status: 'error', action: 'reply', message: 'Cannot determine reply-to address' }));
-        resolve({ ok: false });
-        return;
+function sendReply(action, email) {
+  return new Promise((resolve) => {
+    const replyTo = email.from;
+    if (!replyTo) {
+      console.log(JSON.stringify({ status: 'error', action: 'reply', message: 'Cannot determine reply-to address' }));
+      resolve({ ok: false });
+      return;
+    }
+
+    const subject = action.subject || `Re: ${email.subject}`;
+    const message = action.message || '收到指令，已处理。';
+    const deliverScript = join(homedir(), 'skills/qq-email/scripts/deliver-qq.js');
+    const cmd = `node "${deliverScript}" --message "${message.replace(/"/g, '\\"')}" --to "${replyTo}" --subject "${subject.replace(/"/g, '\\"')}"`;
+
+    const child = spawn('/bin/bash', ['-c', cmd], { stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      // stdout contains the JSON status from deliver-qq.js
+      let result = { status: 'ok', action: 'reply', to: replyTo, subject };
+      try { result = JSON.parse(stdout.trim()) || result; } catch (_) {}
+      if (code !== 0 || result.status === 'error') {
+        result.status = 'error';
+        result.message = stderr.trim() || `exit code ${code}`;
       }
-
-      const subject = action.subject || `Re: ${email.subject}`;
-      const message = action.message || '收到指令，已处理。';
-
-      await transporter.sendMail({
-        from: `"${action.fromName || 'Email Receiver'}" <${transporter.user}>`,
-        to: replyTo,
-        subject,
-        text: message
-      });
-
-      console.log(JSON.stringify({
-        status: 'ok',
-        action: 'reply',
-        to: replyTo,
-        subject
-      }));
-      resolve({ ok: true });
-    } catch (err) {
+      console.log(JSON.stringify(result));
+      resolve({ ok: result.status === 'ok' });
+    });
+    child.on('error', (err) => {
       console.log(JSON.stringify({ status: 'error', action: 'reply', message: err.message }));
       resolve({ ok: false, error: err.message });
-    }
+    });
   });
 }
 
