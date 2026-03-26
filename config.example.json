@@ -1,0 +1,45 @@
+{
+  "imap": {
+    "user": "your-qq-email@qq.com",
+    "pass": "your-smtp-or-imap-authorization-code",
+    "checkIntervalMs": 30000
+  },
+  "whitelist": [
+    {
+      "email": "friend1@qq.com",
+      "actions": [
+        {
+          "type": "reply",
+          "message": "收到指令，正在执行…",
+          "fromName": "Email Receiver"
+        }
+      ]
+    },
+    {
+      "email": "friend2@qq.com",
+      "actions": [
+        {
+          "type": "script",
+          "command": "/path/to/script.sh",
+          "args": []
+        },
+        {
+          "type": "reply",
+          "message": "脚本已执行完毕。"
+        }
+      ]
+    },
+    {
+      "email": "admin@qq.com",
+      "actions": [
+        {
+          "type": "api",
+          "url": "https://example.com/webhook",
+          "method": "POST",
+          "headers": { "Content-Type": "application/json" },
+          "body": { "trigger": true, "from": "qq-receiver" }
+        }
+      ]
+    }
+  ]
+}

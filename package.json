@@ -1,0 +1,17 @@
+{
+  "name": "qq-email-receiver",
+  "version": "1.0.0",
+  "description": "Listen to QQ邮箱 IMAP and execute actions based on sender whitelist",
+  "type": "module",
+  "main": "receive-qq.js",
+  "scripts": {
+    "start": "node receive-qq.js",
+    "once": "node receive-qq.js --once"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.0",
+    "nodemailer": "^6.9.0"
+  }
+}
